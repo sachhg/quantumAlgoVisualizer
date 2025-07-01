@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantum Algorithm Visualizer</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .bloch-sphere { width: 100%; height: 300px; border: 1px solid #e5e7eb; border-radius: 8px; }
+        .circuit-svg { border: 1px solid #e5e7eb; border-radius: 8px; }
+        button { transition: all 0.2s ease-in-out; }
+        button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+        .progress-bar { transition: width 0.5s ease-in-out; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Quantum Simulator Classes
+        class Complex {
+            constructor(real = 0, imag = 0) {
+                this.real = real;
+                this.imag = imag;
+            }
+
+            add(other) {
+                return new Complex(this.real + other.real, this.imag + other.imag);
+            }
+
+            multiply(other) {
+                if (typeof other === 'number') {
+                    return new Complex(this.real * other, this.imag * other);
+                }
+                return new Complex(
+                    this.real * other.real - this.imag * other.imag,
+                    this.real * other.imag + this.imag * other.real
+                );
+            }
+
+            magnitude() {
+                return Math.sqrt(this.real * this.real + this.imag * this.imag);
+            }
+
+            conjugate() {
+                return new Complex(this.real, -this.imag);
+            }
+        }
+
+        class QuantumState {
+            constructor(amplitudes = null) {
+                if (amplitudes) {
+                    this.amplitudes = amplitudes.map(amp => 
+                        amp instanceof Complex ? amp : new Complex(amp, 0)
+                    );
+                } else {
+                    this.amplitudes = [
+                        new Complex(1, 0), new Complex(0, 0), 
+                        new Complex(0, 0), new Complex(0, 0)
+                    ];
+                }
+            }
+
+            getProbabilities() {
+                return this.amplitudes.map(amp => amp.magnitude() ** 2);
+            }
+
+            getBlochCoordinates(qubitIndex) {
+                let alpha, beta;
+                if (qubitIndex === 0) {
+                    alpha = this.amplitudes[0].add(this.amplitudes[1]);
+                    beta = this.amplitudes[2].add(this.amplitudes[3]);
+                } else {
+                    alpha = this.amplitudes[0].add(this.amplitudes[2]);
+                    beta = this.amplitudes[1].add(this.amplitudes[3]);
+                }
+                
+                const norm = Math.sqrt(alpha.magnitude() ** 2 + beta.magnitude() ** 2);
+                if (norm === 0) return { x: 0, y: 0, z: 1 };
+                
+                const alphaNew = alpha.multiply(1 / norm);
+                const betaNew = beta.multiply(1 / norm);
+                
+                const x = 2 * (alphaNew.conjugate().multiply(betaNew)).real;
+                const y = 2 * (alphaNew.conjugate().multiply(betaNew)).imag;
+                const z = alphaNew.magnitude() ** 2 - betaNew.magnitude() ** 2;
+                
+                return { x, y, z };
+            }
+
+            copy() {
+                return new QuantumState(this.amplitudes.map(amp => new Complex(amp.real, amp.imag)));
+            }
+        }
+
+        class QuantumGate {
+            constructor(matrix) {
+                this.matrix = matrix;
+            }
+
+            apply(state) {
+                const newAmplitudes = new Array(4).fill(null).map(() => new Complex(0, 0));
+                
+                for (let i = 0; i < 4; i++) {
+                    for (let j = 0; j < 4; j++) {
+                        newAmplitudes[i] = newAmplitudes[i].add(
+                            this.matrix[i][j].multiply(state.amplitudes[j])
+                        );
+                    }
+                }
+                
+                return new QuantumState(newAmplitudes);
+            }
+        }
+
+        // Quantum Gates
+        const Gates = {
+            H0: new QuantumGate([
+                [new Complex(1/Math.sqrt(2), 0), new Complex(1/Math.sqrt(2), 0), new Complex(0, 0), new Complex(0, 0)],
+                [new Complex(1/Math.sqrt(2), 0), new Complex(-1/Math.sqrt(2), 0), new Complex(0, 0), new Complex(0, 0)],
+                [new Complex(0, 0), new Complex(0, 0), new Complex(1/Math.sqrt(2), 0), new Complex(1/Math.sqrt(2), 0)],
+                [new Complex(0, 0), new Complex(0, 0), new Complex(1/Math.sqrt(2), 0), new Complex(-1/Math.sqrt(2), 0)]
+            ]),
+
+            H1: new QuantumGate([
+                [new Complex(1/Math.sqrt(2), 0), new Complex(0, 0), new Complex(1/Math.sqrt(2), 0), new Complex(0, 0)],
+                [new Complex(0, 0), new Complex(1/Math.sqrt(2), 0), new Complex(0, 0), new Complex(1/Math.sqrt(2), 0)],
+                [new Complex(1/Math.sqrt(2), 0), new Complex(0, 0), new Complex(-1/Math.sqrt(2), 0), new Complex(0, 0)],
+                [new Complex(0, 0), new Complex(1/Math.sqrt(2), 0), new Complex(0, 0), new Complex(-1/Math.sqrt(2), 0)]
+            ]),
+
+            Oracle: new QuantumGate([
+                [new Complex(1, 0), new Complex(0, 0), new Complex(0, 0), new Complex(0, 0)],
+                [new Complex(0, 0), new Complex(1, 0), new Complex(0, 0), new Complex(0, 0)],
+                [new Complex(0, 0), new Complex(0, 0), new Complex(1, 0), new Complex(0, 0)],
+                [new Complex(0, 0), new Complex(0, 0), new Complex(0, 0), new Complex(-1, 0)]
+            ]),
+
+            Diffusion: new QuantumGate([
+                [new Complex(-0.5, 0), new Complex(0.5, 0), new Complex(0.5, 0), new Complex(0.5, 0)],
+                [new Complex(0.5, 0), new Complex(-0.5, 0), new Complex(0.5, 0), new Complex(0.5, 0)],
+                [new Complex(0.5, 0), new Complex(0.5, 0), new Complex(-0.5, 0), new Complex(0.5, 0)],
+                [new Complex(0.5, 0), new Complex(0.5, 0), new Complex(0.5, 0), new Complex(-0.5, 0)]
+            ])
+        };
+
+        class GroverAlgorithm {
+            constructor() {
+                this.reset();
+            }
+
+            reset() {
+                this.states = [];
+                this.steps = [];
+                this.currentStep = 0;
+                this.iterations = 1;
+            }
+
+            run(iterations = 1) {
+                this.reset();
+                this.iterations = iterations;
+                
+                let state = new QuantumState();
+                this.states.push(state.copy());
+                this.steps.push({ name: 'Initial', description: 'Start with |00⟩ state' });
+
+                state = Gates.H1.apply(state);
+                state = Gates.H0.apply(state);
+                this.states.push(state.copy());
+                this.steps.push({ name: 'Superposition', description: 'Apply H gates to create equal superposition' });
+
+                for (let i = 0; i < iterations; i++) {
+                    state = Gates.Oracle.apply(state);
+                    this.states.push(state.copy());
+                    this.steps.push({ name: `Oracle ${i + 1}`, description: `Oracle marks the target state |11⟩` });
+
+                    state = Gates.Diffusion.apply(state);
+                    this.states.push(state.copy());
+                    this.steps.push({ name: `Diffusion ${i + 1}`, description: 'Diffusion operator amplifies marked state' });
+                }
+
+                return this.states;
+            }
+
+            getCurrentState() {
+                return this.states[this.currentStep] || new QuantumState();
+            }
+
+            getCurrentStep() {
+                return this.steps[this.currentStep] || { name: 'Initial', description: 'Start with |00⟩ state' };
+            }
+
+            nextStep() {
+                if (this.currentStep < this.states.length - 1) {
+                    this.currentStep++;
+                    return true;
+                }
+                return false;
+            }
+
+            prevStep() {
+                if (this.currentStep > 0) {
+                    this.currentStep--;
+                    return true;
+                }
+                return false;
+            }
+
+            setStep(step) {
+                if (step >= 0 && step < this.states.length) {
+                    this.currentStep = step;
+                    return true;
+                }
+                return false;
+            }
+
+            getTotalSteps() {
+                return this.states.length;
+            }
+        }
+
+        // React Components
+        const CircuitDiagram = ({ step, stepInfo }) => {
+            const renderGate = (gate, x, y, width = 40, height = 30) => {
+                return React.createElement('g', { key: `${gate}-${x}-${y}` }, [
+                    React.createElement('rect', {
+                        key: 'rect',
+                        x: x - width/2, y: y - height/2,
+                        width, height,
+                        fill: 'white', stroke: '#2563eb', strokeWidth: '2', rx: '4'
+                    }),
+                    React.createElement('text', {
+                        key: 'text',
+                        x, y: y + 5,
+                        textAnchor: 'middle', fontSize: '14', fontWeight: 'bold', fill: '#2563eb'
+                    }, gate)
+                ]);
+            };
+
+            const renderQubitLine = (y, label) => {
+                return React.createElement('g', { key: `qubit-${label}` }, [
+                    React.createElement('line', {
+                        key: 'line',
+                        x1: 50, y1: y, x2: 550, y2: y,
+                        stroke: '#374151', strokeWidth: '2'
+                    }),
+                    React.createElement('text', {
+                        key: 'text',
+                        x: 30, y: y + 5,
+                        textAnchor: 'middle', fontSize: '14', fontWeight: 'bold', fill: '#374151'
+                    }, label)
+                ]);
+            };
+
+            const getCircuitForStep = (stepIndex) => {
+                const qubit0Y = 100;
+                const qubit1Y = 160;
+                const gates = [];
+
+                switch (stepIndex) {
+                    case 0:
+                        return { gates: [], title: "Initial State |00⟩" };
+                    case 1:
+                        gates.push(renderGate('H', 150, qubit0Y));
+                        gates.push(renderGate('H', 150, qubit1Y));
+                        return { gates, title: "Superposition: H ⊗ H" };
+                    case 2:
+                        gates.push(renderGate('H', 150, qubit0Y));
+                        gates.push(renderGate('H', 150, qubit1Y));
+                        gates.push(renderGate('Oracle', 250, qubit0Y + 30, 60, 60));
+                        return { gates, title: "Oracle: Mark |11⟩" };
+                    case 3:
+                        gates.push(renderGate('H', 150, qubit0Y));
+                        gates.push(renderGate('H', 150, qubit1Y));
+                        gates.push(renderGate('Oracle', 250, qubit0Y + 30, 60, 60));
+                        gates.push(renderGate('Diff', 350, qubit0Y + 30, 60, 60));
+                        return { gates, title: "Diffusion: Amplitude Amplification" };
+                    default:
+                        return { gates: [], title: "Circuit Diagram" };
+                }
+            };
+
+            const { gates, title } = getCircuitForStep(step);
+
+            return React.createElement('div', { className: 'bg-white rounded-lg shadow-lg p-6' }, [
+                React.createElement('h3', { 
+                    key: 'title',
+                    className: 'text-xl font-bold text-gray-800 mb-4 text-center' 
+                }, title),
+                React.createElement('div', { key: 'diagram', className: 'flex justify-center' },
+                    React.createElement('svg', { 
+                        width: '600', height: '220', 
+                        className: 'circuit-svg'
+                    }, [
+                        React.createElement('rect', { 
+                            key: 'bg',
+                            width: '600', height: '220', fill: '#f9fafb' 
+                        }),
+                        renderQubitLine(100, '|q₁⟩'),
+                        renderQubitLine(160, '|q₀⟩'),
+                        ...gates,
+                        React.createElement('text', {
+                            key: 'step-indicator',
+                            x: 300, y: 30,
+                            textAnchor: 'middle', fontSize: '16', fontWeight: 'bold', fill: '#1f2937'
+                        }, `Step ${step + 1}: ${stepInfo?.name || 'Unknown'}`)
+                    ])
+                ),
+                React.createElement('div', { 
+                    key: 'description',
+                    className: 'mt-4 p-3 bg-blue-50 rounded-lg' 
+                },
+                    React.createElement('p', { className: 'text-sm text-blue-800' }, [
+                        React.createElement('strong', { key: 'name' }, `${stepInfo?.name}: `),
+                        stepInfo?.description
+                    ])
+                )
+            ]);
+        };
+
+        const BlochSphere = ({ quantumState, qubitIndex }) => {
+            const containerRef = React.useRef();
+            const sceneRef = React.useRef();
+            const rendererRef = React.useRef();
+            const stateVectorRef = React.useRef();
+
+            React.useEffect(() => {
+                if (!containerRef.current) return;
+
+                // Initialize Three.js scene
+                const scene = new THREE.Scene();
+                const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+                const renderer = new THREE.WebGLRenderer({ antialias: true });
+                
+                renderer.setSize(300, 300);
+                renderer.setClearColor(0xf9fafb);
+                containerRef.current.appendChild(renderer.domElement);
+
+                // Add lights
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                scene.add(ambientLight);
+                const pointLight = new THREE.PointLight(0xffffff, 0.4);
+                pointLight.position.set(10, 10, 10);
+                scene.add(pointLight);
+
+                // Create sphere wireframe
+                const sphereGeometry = new THREE.SphereGeometry(1, 16, 12);
+                const sphereMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0xe5e7eb, wireframe: true, transparent: true, opacity: 0.3 
+                });
+                const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+                scene.add(sphere);
+
+                // Create axes
+                const axesGroup = new THREE.Group();
+                
+                // X axis (red)
+                const xGeometry = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(-1.2, 0, 0), new THREE.Vector3(1.2, 0, 0)
+                ]);
+                const xMaterial = new THREE.LineBasicMaterial({ color: 0xef4444 });
+                const xLine = new THREE.Line(xGeometry, xMaterial);
+                axesGroup.add(xLine);
+
+                // Y axis (green)
+                const yGeometry = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, 0, -1.2), new THREE.Vector3(0, 0, 1.2)
+                ]);
+                const yMaterial = new THREE.LineBasicMaterial({ color: 0x22c55e });
+                const yLine = new THREE.Line(yGeometry, yMaterial);
+                axesGroup.add(yLine);
+
+                // Z axis (blue)
+                const zGeometry = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, -1.2, 0), new THREE.Vector3(0, 1.2, 0)
+                ]);
+                const zMaterial = new THREE.LineBasicMaterial({ color: 0x3b82f6 });
+                const zLine = new THREE.Line(zGeometry, zMaterial);
+                axesGroup.add(zLine);
+
+                scene.add(axesGroup);
+
+                // State vector
+                const stateGeometry = new THREE.SphereGeometry(0.05);
+                const stateMaterial = new THREE.MeshStandardMaterial({ color: 0x7c3aed });
+                const stateVector = new THREE.Mesh(stateGeometry, stateMaterial);
+                scene.add(stateVector);
+
+                camera.position.set(2, 2, 2);
+                camera.lookAt(0, 0, 0);
+
+                sceneRef.current = scene;
+                rendererRef.current = renderer;
+                stateVectorRef.current = stateVector;
+
+                // Animation loop
+                const animate = () => {
+                    requestAnimationFrame(animate);
+                    renderer.render(scene, camera);
+                };
+                animate();
+
+                return () => {
+                    if (containerRef.current && renderer.domElement) {
+                        containerRef.current.removeChild(renderer.domElement);
+                    }
+                    renderer.dispose();
+                };
+            }, []);
+
+            React.useEffect(() => {
+                if (quantumState && stateVectorRef.current) {
+                    const blochCoords = quantumState.getBlochCoordinates(qubitIndex);
+                    stateVectorRef.current.position.set(blochCoords.x, blochCoords.z, blochCoords.y);
+                }
+            }, [quantumState, qubitIndex]);
+
+            const blochCoords = quantumState ? quantumState.getBlochCoordinates(qubitIndex) : { x: 0, y: 0, z: 1 };
+
+            return React.createElement('div', { className: 'bg-white rounded-lg shadow-lg p-4' }, [
+                React.createElement('h4', { 
+                    key: 'title',
+                    className: 'text-lg font-semibold text-gray-800 mb-2 text-center' 
+                }, `Qubit ${qubitIndex}`),
+                React.createElement('div', { 
+                    key: 'sphere',
+                    ref: containerRef, 
+                    className: 'bloch-sphere' 
+                }),
+                React.createElement('div', { 
+                    key: 'coords',
+                    className: 'mt-2 text-sm text-gray-600 text-center' 
+                }, [
+                    React.createElement('div', { key: 'x' }, `X: ${blochCoords.x.toFixed(3)}`),
+                    React.createElement('div', { key: 'y' }, `Y: ${blochCoords.y.toFixed(3)}`),
+                    React.createElement('div', { key: 'z' }, `Z: ${blochCoords.z.toFixed(3)}`)
+                ])
+            ]);
+        };
+
+        // Main App Component
+        const App = () => {
+            const [grover] = React.useState(new GroverAlgorithm());
+            const [currentStep, setCurrentStep] = React.useState(0);
+            const [iterations, setIterations] = React.useState(1);
+            const [isRunning, setIsRunning] = React.useState(false);
+            const [quantumState, setQuantumState] = React.useState(null);
+            const [stepInfo, setStepInfo] = React.useState(null);
+
+            React.useEffect(() => {
+                runAlgorithm();
+            }, [iterations]);
+
+            const runAlgorithm = () => {
+                grover.run(iterations);
+                setCurrentStep(0);
+                updateCurrentState();
+            };
+
+            const updateCurrentState = () => {
+                const state = grover.getCurrentState();
+                const info = grover.getCurrentStep();
+                setQuantumState(state);
+                setStepInfo(info);
+            };
+
+            const nextStep = () => {
+                if (grover.nextStep()) {
+                    setCurrentStep(prev => prev + 1);
+                    updateCurrentState();
+                }
+            };
+
+            const prevStep = () => {
+                if (grover.prevStep()) {
+                    setCurrentStep(prev => prev - 1);
+                    updateCurrentState();
+                }
+            };
+
+            const resetAlgorithm = () => {
+                grover.setStep(0);
+                setCurrentStep(0);
+                updateCurrentState();
+            };
+
+            const autoPlay = async () => {
+                if (isRunning) return;
+                
+                setIsRunning(true);
+                resetAlgorithm();
+                
+                const totalSteps = grover.getTotalSteps();
+                for (let i = 0; i < totalSteps - 1; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 1500));
+                    if (grover.nextStep()) {
+                        setCurrentStep(prev => prev + 1);
+                        updateCurrentState();
+                    }
+                }
+                
+                setIsRunning(false);
+            };
+
+            const probabilities = quantumState ? quantumState.getProbabilities() : [1, 0, 0, 0];
+            const totalSteps = grover.getTotalSteps();
+
+            return React.createElement('div', { className: 'min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100' },
+                React.createElement('div', { className: 'container mx-auto px-4 py-8' }, [
+                    // Header
+                    React.createElement('header', { key: 'header', className: 'text-center mb-8' }, [
+                        React.createElement('h1', { 
+                            key: 'title',
+                            className: 'text-4xl font-bold text-gray-900 mb-2' 
+                        }, 'Quantum Algorithm Visualizer'),
+                        React.createElement('p', { 
+                            key: 'subtitle',
+                            className: 'text-lg text-gray-600' 
+                        }, 'Interactive visualization of Grover\'s Algorithm on 2 qubits')
+                    ]),
+
+                    // Controls
+                    React.createElement('div', { key: 'controls', className: 'bg-white rounded-lg shadow-lg p-6 mb-8' },
+                        React.createElement('div', { className: 'flex flex-col lg:flex-row items-center justify-between gap-6' }, [
+                            // Iteration Control
+                            React.createElement('div', { key: 'iteration', className: 'flex items-center gap-4' }, [
+                                React.createElement('label', { 
+                                    key: 'label',
+                                    className: 'text-sm font-medium text-gray-700' 
+                                }, `Iterations: ${iterations}`),
+                                React.createElement('input', {
+                                    key: 'slider',
+                                    type: 'range',
+                                    min: 1, max: 3, value: iterations,
+                                    onChange: (e) => setIterations(parseInt(e.target.value)),
+                                    className: 'w-32'
+                                })
+                            ]),
+
+                            // Navigation Controls
+                            React.createElement('div', { key: 'nav', className: 'flex items-center gap-2' }, [
+                                React.createElement('button', {
+                                    key: 'reset',
+                                    onClick: resetAlgorithm,
+                                    disabled: isRunning,
+                                    className: 'px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 disabled:opacity-50'
+                                }, 'Reset'),
+                                
+                                React.createElement('button', {
+                                    key: 'autoplay',
+                                    onClick: autoPlay,
+                                    disabled: isRunning,
+                                    className: 'px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50'
+                                }, isRunning ? 'Running...' : 'Auto Play'),
+
+                                React.createElement('button', {
+                                    key: 'prev',
+                                    onClick: prevStep,
+                                    disabled: currentStep === 0 || isRunning,
+                                    className: 'px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50'
+                                }, 'Prev'),
+
+                                React.createElement('span', {
+                                    key: 'counter',
+                                    className: 'px-4 py-2 bg-gray-100 rounded-lg font-medium'
+                                }, `${currentStep + 1} / ${totalSteps}`),
+
+                                React.createElement('button', {
+                                    key: 'next',
+                                    onClick: nextStep,
+                                    disabled: currentStep === totalSteps - 1 || isRunning,
+                                    className: 'px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50'
+                                }, 'Next')
+                            ])
+                        ])
+                    ),
+
+                    // Circuit Diagram
+                    React.createElement('div', { key: 'circuit', className: 'mb-8' },
+                        React.createElement(CircuitDiagram, { step: currentStep, stepInfo })
+                    ),
+
+                    // Bloch Spheres
+                    React.createElement('div', { key: 'spheres', className: 'grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8' }, [
+                        React.createElement(BlochSphere, { 
+                            key: 'sphere0',
+                            quantumState, qubitIndex: 0 
+                        }),
+                        React.createElement(BlochSphere, { 
+                            key: 'sphere1',
+                            quantumState, qubitIndex: 1 
+                        })
+                    ]),
+
+                    // State Probabilities
+                    React.createElement('div', { key: 'probabilities', className: 'bg-white rounded-lg shadow-lg p-6' }, [
+                        React.createElement('h3', { 
+                            key: 'title',
+                            className: 'text-xl font-bold text-gray-800 mb-4' 
+                        }, 'State Probabilities'),
+                        React.createElement('div', { 
+                            key: 'grid',
+                            className: 'grid grid-cols-2 lg:grid-cols-4 gap-4' 
+                        }, ['|00⟩', '|01⟩', '|10⟩', '|11⟩'].map((state, index) =>
+                            React.createElement('div', { key: state, className: 'text-center' }, [
+                                React.createElement('div', { 
+                                    key: 'label',
+                                    className: 'text-lg font-semibold text-gray-700 mb-2' 
+                                }, state),
+                                React.createElement('div', { 
+                                    key: 'bar-bg',
+                                    className: 'bg-gray-200 rounded-full h-4 mb-2' 
+                                },
+                                    React.createElement('div', {
+                                        key: 'bar',
+                                        className: 'bg-blue-500 h-4 rounded-full progress-bar',
+                                        style: { width: `${(probabilities[index] * 100).toFixed(1)}%` }
+                                    })
+                                ),
+                                React.createElement('div', { 
+                                    key: 'percentage',
+                                    className: 'text-sm text-gray-600' 
+                                }, `${(probabilities[index] * 100).toFixed(1)}%`)
+                            ])
+                        ))
+                    ])
+                ])
+            );
+        };
+
+        // Render the app
+        ReactDOM.render(React.createElement(App), document.getElementById('root'));
+    </script>
+</body>
+</html>
+
